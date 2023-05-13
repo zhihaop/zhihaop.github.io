@@ -116,8 +116,11 @@ TiDB 采用该方式，优点是不需要考虑 协调者 可靠性（为什么�
 
 #### Bigtable
 
-Percolator 数据存储在 Bigtable 中，它支持单行事务，查询格式如下：`(row, col, timestamp) -> value`
-Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数据的键，一个 Key 可以有多行数据，每一行的时间戳都不相同。在每一行中，分别有 Data，Lock，Write 三个字段。假设 `start_ts`为事务开始时间，`commit_ts`为事务提交时间。
+Percolator 数据存储在 Bigtable 中，它支持单行事务，查询格式如下：`(row, col, timestamp) -> value`  
+
+Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数据的键，一个 Key 可以有多行数据，每一行的时间戳都不相同。  
+
+在每一行中，分别有 Data，Lock，Write 三个字段。假设 `start_ts`为事务开始时间，`commit_ts`为事务提交时间。
 
 #### Data
 
@@ -125,13 +128,16 @@ Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数
 
 #### Lock
 
-事务的锁：`(key, start_ts) -> lock`
-其中`lock`的类型有两种，一种是`primary`，一种是`secondary`。
+事务的锁：`(key, start_ts) -> lock`  
+
+其中`lock`的类型有两种，一种是`primary`，一种是`secondary`。  
+
 如果`lock`指向自己，那么就是`primary`锁，否则就是`secondary`锁。
 
 #### Write
 
-已提交数据对应的时间戳：`(key, commit_ts) -> start_ts`
+已提交数据对应的时间戳：`(key, commit_ts) -> start_ts`  
+
 一个键读取时，会找到最近的已提交的时间戳`start_ts`，通过`(key, start_ts)`读取`value`来确保 SI。
 
 #### 一些思考
@@ -185,12 +191,12 @@ Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数
 
 ```cpp
 class Transaction {
- struct Write { Row row; Column col; string value; };
- vector<Write> writers_;
- int start_ts_;
+    struct Write { Row row; Column col; string value; };
+    vector<Write> writers_;
+    int start_ts_;
 
     Transaction(): start_ts_(oracle.GetTimestamp()) {}
- void Set(Write w) { writers_.push_back(w); }
+    void Set(Write w) { writers_.push_back(w); }
     bool Get(Row row, Column c, string* value) {
         while (true) {
             bigtable::Txn T = bigtable::StartRowTransaction(row);
