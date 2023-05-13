@@ -4,34 +4,34 @@ title:  "Percolator：Large-scale Incremental Processing Using Distributed Trans
 date:   2023-05-14 00:04:36 +0800
 categories: jekyll update
 ---
-## 摘要
+## 1. 摘要
 
-### 背景
+### 1.1 背景
 
 1. 从前 MapReduce 跑网页索引 需要跑全量互联网的页面，并存储在 BigTable 中。
 2. 随着页面数量越来越多，开销和耗时越来越大。
 3. MapReduce 只能全量更新，不能增量更新。
 4. 为了只处理增量的新页面，Google 将索引的维护抽象成事务，通过执行一系列的并发事务来解决。
 
-### 概述
+### 1.2 概述
 
 1. Percolator 在 BigTable  **单行事务**基础上，实现了**多行事务**，
 2. 通过 MVCC 和一个全局授时服务器（Timestamp Oracle，TSO）来实现快照隔离（Snapshot Isolation，SI）语义的分布式事务能力。
 3. 本文将着重讲解 Percolator 和它的前身 2PC 协议，对原论文的 Observer 机制会略过。
 
-## 两阶段提交 Two Phase Commit
+## 2. 两阶段提交 Two Phase Commit
 
-### 两个角色
+### 2.1 两个角色
 
 - 一个 Coordinator 协调者：负载事务的协调，以库或者单独服务的形式出现。
 - 多个 Participant 参与者：负载具体事务的执行，持有具体数据。
 
-### 两个阶段
+### 2.2 两个阶段
 
 1. Prepare 阶段：协调者 向各 参与者 节点发送 Prepare 消息，各 参与者 告诉协调者该事务**提交与否**。
 2. Commit 阶段：协调者 收到各 参与者 的**所有响应**。任一节点不同意提交，事务回滚。否则提交事务。
 
-### 存疑状态
+### 2.3 存疑状态
 
 对于参与者来说，当它在 Prepare 阶段回复`YES`时，就进入了 **存疑（uncertain）状态**，直到收到 **协调者** 发来的 Commit 请求。在存疑状态时，整个事务可能已经提交，也可能没有提交。  
 
@@ -39,22 +39,24 @@ categories: jekyll update
 
 显然协调者对于事务执行情况是最清楚的，在协调者眼中，一个事务被提交与否，取决于当前是否越过**提交点**。
 
-### 提交点 Commit Point
+### 2.4 提交点 Commit Point
 
-#### 单机事务的提交点
+#### 2.4.1 单机事务的提交点
 
 单机事务实现原子性并不复杂，一般的做法是：将事务提交前的写入存放在**预写日志**中，事务提交时，往磁盘追加一条**提交记录**，完成事务提交。  
 
 所谓提交点（Commit Point），就是指**提交记录刷盘那一刻**。在此刻之前，事务的所有写入都是未提交状态，可以被回滚或中止。而在提交点之后，整个事务提交成功。
 
-#### 提交点的本质
+#### 2.4.2 提交点的本质
 
 提交点将多个操作的提交**规约到单点提交问题**，确保了事务的原子性。在 2PC 中，由于一个事务会牵扯多个节点，要保证事务原子性，必须满足提交点原子性。有以下几种方案：
 
-#### 协调者写入 提交记录 时为 提交点
+#### 2.4.3 协调者写入 提交记录 时为 提交点
 
-**思想：**协调者在发起提交阶段之前，在本地记录一份提交记录，**提交记录**被持久化标识着事务提交成功。
-**细节：**需要在事务开始前，对事务的**参与者列表**进行持久化。
+**思想：**协调者在发起提交阶段之前，在本地记录一份提交记录，**提交记录**被持久化标识着事务提交成功。  
+
+**细节：**需要在事务开始前，对事务的**参与者列表**进行持久化。  
+
 **故障恢复：**
 
 - 在提交点前崩溃了，由于没有提交，只需告知参与者列表中所有参与者，事务中止（abort）。
@@ -62,9 +64,10 @@ categories: jekyll update
 
 X/Open XA 事务就是采用这种方式，它依赖于可靠的协调者，需要保证协调者崩溃后能恢复服务且不丢失数据。
 
-#### 所有参与者完成第一阶段时 为 提交点
+#### 2.4.4 所有参与者完成第一阶段时 为 提交点
 
-**思想：**在`协调者写入提交记录时为提交点`方案中，提交记录被持久化仅当所有参与者回复`YES`。因此提交点可以前移到所有参与者回复`YES`，从而避免刷盘的延迟。
+**思想：**在`协调者写入提交记录时为提交点`方案中，提交记录被持久化仅当所有参与者回复`YES`。因此提交点可以前移到所有参与者回复`YES`，从而避免刷盘的延迟。  
+
 **细节：**
 
 - 参与者列表在**协调者**维护：需要在事务开始前，对事务的参与者列表进行持久化。
@@ -79,26 +82,28 @@ X/Open XA 事务就是采用这种方式，它依赖于可靠的协调者，需�
 
 Oceanbase 据说采用这个方案。优点是避免了刷盘的延时，但是协调者崩溃后恢复成本较高。
 
-#### 某一特殊的 参与者 完成 Commit 阶段 为 提交点
+#### 2.4.5 某一特殊的 参与者 完成 Commit 阶段 为 提交点
 
-**思想：**从参与者中选一个作为 Primary，以 Primary 提交成功作为事务的提交点。（Percolator 思想）
-**细节和故障恢复：**协调者不持久化任何事务状态，由参与者进行故障恢复，具体见下一章的 Percolator 讲解。
+**思想：**从参与者中选一个作为 Primary，以 Primary 提交成功作为事务的提交点。（Percolator 思想）  
+
+**细节和故障恢复：**协调者不持久化任何事务状态，由参与者进行故障恢复，具体见下一章的 Percolator 讲解。  
+
 TiDB 采用该方式，优点是不需要考虑 协调者 可靠性（为什么会在本文 Percolator 讲解章节指出），缺点是延时是三者中最高的。
 
-## Percolator
+## 3. Percolator
 
-### 总体设计
+### 3.1 总体设计
 
 1. 提交过程中的第一个参与者，被设计为类似两阶段提交协调者的角色，整个事务的原子性以它为准。
 2. 借用 Bigtable 的高可用存储，免去设计协调者的风险和麻烦。
 3. 通过 Bigtable 的时间戳维度实现数据多版本。
 4. 采用 TSO 全局授时机制，通过全局时间戳实现多版本管理，从而实现了 SI。
 
-### TSO
+### 3.2 TSO
 
 相当于一个授时中心，需要保证任何申请的时钟不重，并严格递增。但是需要高并发和高可用。
 
-#### 优化
+#### 3.2.1 优化
 
 - 定期分配一个范围的时间戳，并持久化其最大值$T_{max}$。
 - 在内存中原子递增快速获取时间戳。
@@ -106,15 +111,15 @@ TiDB 采用该方式，优点是不需要考虑 协调者 可靠性（为什么�
 - Worker 批量获取时间戳
 - 通过 Paxos/Raft 保证存储高可用即可
 
-#### 其他的一些时序方案（转）
+#### 3.2.2 其他的一些时序方案（转）
 
 - 逻辑时钟：DynanoDB
 - True Time API：Spanner
 - 混合逻辑时钟：CockroachDB
 
-### 数据存储
+### 3.3 数据存储
 
-#### Bigtable
+#### 3.3.1 Bigtable
 
 Percolator 数据存储在 Bigtable 中，它支持单行事务，查询格式如下：`(row, col, timestamp) -> value`  
 
@@ -122,11 +127,11 @@ Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数
 
 在每一行中，分别有 Data，Lock，Write 三个字段。假设 `start_ts`为事务开始时间，`commit_ts`为事务提交时间。
 
-#### Data
+#### 3.3.2 Data
 
 存储数据的列：`(key, start_ts) -> value`
 
-#### Lock
+#### 3.3.3 Lock
 
 事务的锁：`(key, start_ts) -> lock`  
 
@@ -134,19 +139,19 @@ Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数
 
 如果`lock`指向自己，那么就是`primary`锁，否则就是`secondary`锁。
 
-#### Write
+#### 3.3.4 Write
 
 已提交数据对应的时间戳：`(key, commit_ts) -> start_ts`  
 
 一个键读取时，会找到最近的已提交的时间戳`start_ts`，通过`(key, start_ts)`读取`value`来确保 SI。
 
-#### 一些思考
+#### 3.3.5 一些思考
 
 - Percolator 实际上用`lock`字段作为并发控制，`data`字段作为预写日志，`write`字段作为提交标志。
 - 通过 TSO、Bigtable 时间戳和`lock`实现了 SI 隔离语义。
 - 通过`primary`的`write`字段的持久化作为分布式事务的提交点。
 
-### 事务流程
+### 3.4 事务流程
 
 ![image.png](https://raw.githubusercontent.com/zhihaop/zhihaop.github.io/master/_imgs/2023-05-14/1.png)
 
@@ -174,13 +179,13 @@ Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数
 3. Percolator 会选中一行作为`primary`，事务的**提交与否**都使用这行决定。
 4. Percolator 事务存在两阶段，其**提交点**是`primary`单行事务完成的瞬间。
 
-### Percolator 快照读
+### 3.5 Percolator 快照读
 
-#### 大体机制
+#### 3.5.1 大体机制
 
 `write`行决定了事务的提交状态，只需对于某个时间戳`start_ts`，只需要通过`write`列找到最近一次已提交的时间戳`T < start_ts`，然后读`data`列`(key, T) -> value`即可。
 
-#### 崩溃恢复
+#### 3.5.2 崩溃恢复
 
 但是上面的机制不能保证 Percolator 在提交阶段崩溃后，当前事务仍然能找到已提交的数据。我们需要考虑崩溃恢复的情况。如果该行的`[0, start_ts]`时间段：
 
@@ -218,15 +223,15 @@ class Transaction {
 };
 ```
 
-### Percolator 特色的两阶段提交
+### 3.6 Percolator 特色的两阶段提交
 
-#### 前提概要
+#### 3.6.1 前提概要
 
 - Percolator 在事务正式开始前，会选取第一个写入行作为`primary`，其他行作为`secondary`。
 - `primary`字段是整个事务控制的中轴。事务是否提交，关键是`primary`上的`write`字段是否持久化。
 - `secondary`的`lock`字段通过指向`primary`，可以快速获知`primary`的`write`列状态，从而判断`secondary`对应的事务是否提交。
 
-#### Prewrite 阶段
+#### 3.6.2 Prewrite 阶段
 
 Prewrite 阶段下，Percolator 会对`primary`和`secondary`发起`Prewrite`。可看作2PC的`Prepare`请求。
 
@@ -251,7 +256,7 @@ bool Prewrite(Write w, Write primary) {
 }
 ```
 
-#### Commit 阶段
+#### 3.6.3 Commit 阶段
 
 Commit 阶段下，Percolator 会先拿到一个提交时间戳，随后进行提交操作。
 
@@ -282,7 +287,7 @@ bool Commit() {
 }
 ```
 
-#### 一些思考：为什么 Percolator 不需要持久化
+#### 3.6.4 一些思考：为什么 Percolator 不需要持久化
 
 2PC 需要持久化，是因为它在故障恢复时，必须得知 **提交点的信息** 和 **所有参与者**的信息。  
 
@@ -292,27 +297,27 @@ bool Commit() {
 
 因此，Percolator 将需要持久化的部分保存在了高可用的 Bigtable 存储上，从而同时保证了 Percolator 不需要单独持久化组件的同时，保证协调者的高可用。
 
-#### 一些思考：崩溃恢复的阶段在哪
+#### 3.6.5 一些思考：崩溃恢复的阶段在哪
 
 Percolator 将崩溃恢复阶段放到了快照读的过程中。快照读时，如果发现`[0, start_ts]`时间戳上带锁，Percolator 会判断上一个事务是否完成，是否崩溃，是否提交，并对 `primary`和`secondary`行进行相应的操作，从而保证在`Prewrite`阶段前，崩溃恢复完成。
 
-### TiDB/KV 对 Percolator 的优化
+### 3.7 TiDB/KV 对 Percolator 的优化
 
-#### Parallel Prewrite
+#### 3.7.1 Parallel Prewrite
 
 本质是 Batching 优化，分批并发地进行 Prewrite
 
-#### Short Value
+#### 3.7.2 Short Value
 
 本质是减少 I/O。对于 Percolator，会先读取`write`列，根据里面的时间戳再读取`data`列数据。如果数据本身很小，直接存在`write`列就不用读两次了
 
-#### Point Read Without Timestamp + Single Region 1PC
+#### 3.7.3 Point Read Without Timestamp + Single Region 1PC
 
 单点读不涉及跨行事务，直接不用 timestamp，直接 1PC 本地执行事务即可。  
 
 如果涉及多行事务，但是这些行都在单个 Region 内，还是需要获取 timestamp 来保证 SI ，但可以直接 1PC。
 
-#### Calculated Commit Timestamp（转）
+#### 3.7.4 Calculated Commit Timestamp（转）
 
 在可重复读快照隔离级别，commit_ts 需要确保其他事务多次读取一样的值，因此可以直接算出来：  
 
@@ -322,22 +327,22 @@ Percolator 将崩溃恢复阶段放到了快照读的过程中。快照读时，
 
 `commit_ts = max{start_ts, region_1_max_read_ts, region_2_max_read_ts, ...} + 1`
 
-### 总结
+### 3.8 总结
 
-#### 任务分解的创新
+#### 3.8.1 任务分解的创新
 
 1. Percolator 将 2PC 分解为持久化的部分和非持久化的部分
 2. 持久化的部分记录了 Percolator 故障恢复所需的所有信息
 3. 非持久化的部分放在 Percolator 上，使得它是一个无状态的中间层
 4. 崩溃恢复的部分分解到了快照读的过程中
 
-#### 提交点的创新
+#### 3.8.2 提交点的创新
 
 1. Percolator 将多行事务分解为`primary`和`secondary`
 2. `secondary`提交的状态以`primary`为准
 3. **提交点**是`primary`单行事务完成的瞬间，保证了其原子性和高可用。
 
-#### 并发控制的创新
+#### 3.8.3 并发控制的创新
 
 1. 通过 Bigtable 时间戳实现存储层面多版本
 2. 通过 TSO 实现并发层面多版本
