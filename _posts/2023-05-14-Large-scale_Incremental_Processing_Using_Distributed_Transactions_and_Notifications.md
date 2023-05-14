@@ -153,7 +153,7 @@ Percolator 定义了 4 个列，分别为 Key，Data，Lock，Write。Key 指数
 
 ### 3.4 事务流程
 
-![image.png](https://raw.githubusercontent.com/zhihaop/zhihaop.github.io/master/_imgs/2023-05-14/1.png)
+![image.png](https://raw.githubusercontent.com/zhihaop/zhihaop.github.io/master/_imgs/2023-05-14/0.png)
 
 1. Percolator 作为一个中间人，它被包装在 Bigtable Client 的上层，应用程序的下层。
 2. Percolator 是无状态的，作为协调者，它不持久化任何状态信息。
