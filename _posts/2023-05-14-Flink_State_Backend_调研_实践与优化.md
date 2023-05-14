@@ -265,7 +265,7 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 
 ### 3.5 LazyBuffer
 
-有点类似 Netty 中的 ComposeByteBuf，减少I/O。实际思想和 Lazy Compaction 类似，通过一个虚拟层，替代 PinnableSlice 延迟 I/O 发生的时间，从而减少不必要的 I/O 开销。
+有点类似 Netty 中的 CompositeByteBuf，减少I/O。实际思想和 Lazy Compaction 类似，通过一个虚拟层，替代 PinnableSlice 延迟 I/O 发生的时间，从而减少不必要的 I/O 开销。
 
 ### 3.6 Checkpoint&Compaction 优化
 
@@ -276,7 +276,7 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 
 #### WAL Checkpoint
 
-- Flink 1.15 的 Generic Log-Based Incremental Checkpoint，但不是 Generic 的。
+- 类似 Flink 1.15 的 Generic Log-Based Incremental Checkpoint，但不是 Generic 的。
 - 利用 WAL，Checkpoint 时只持久化 WAL，不进行 Compaction。
 - 回放只需 Snapshot + WAL 回放。
 - 只需增量上传 WAL 部分。
@@ -287,7 +287,7 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 
 可以做 FPGA，QAT 来 off-load 压缩。用 NVM 或 KVSSD 做存储。
 
-## 4. Changelog Incremental Checkpoint
+## 4. Generic Log-Based Incremental Checkpointing
 
 ### 4.1 发展历史
 
@@ -295,7 +295,7 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 - Incremental Checkpoint：主要解决全量 Snapshot 时间长，上传数据多的问题
 - Unaligned Checkpoint：本质还是 Chandy-Lamport 算法，解决背压 Checkpoint 阻塞问题
 - Buffer Debloating：Debloating 就是消胀。本质就是缩减 Inflight 数据（即在上下游中间的数据），降低 Distributed Snapshot 的存储开销
-- Changelog Incremental Checkpoint（New）：解决 Incremental Checkpoint 刷盘导致的压缩（可能导致吞吐量峰刺和write stall），减少需要上传的 SST 文件数量。
+- Generic Log-Based Incremental Checkpointing（New）：解决 Incremental Checkpoint 刷盘导致的压缩（可能导致吞吐量峰刺和write stall），减少需要上传的 SST 文件数量。
 
 ### 4.2 Aligned & Unaligned Checkpoint
 
@@ -304,8 +304,8 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 - barrier 相当于 Chandy-Lamport 中的 marker，收到 marker 后：
   - 向下游 output channel 发送 marker
   - 记录自己进程的状态，开始记录所有上游 input channel 接受到的 message
-- Aligned Checkpoint：barrier 和数据在一个 channel 内流动（受背压影响）。
-- Unaligned Checkpoint：相当于 barrier 和 数据分开两个 channel。
+  - Aligned Checkpoint：barrier 和数据在一个 channel 内（受背压影响），先处理数据再处理 barrier。
+  - Unaligned Checkpoint：barrier 和数据在一个 channel 内流动，但是存在一种机制告知下游，channel 内存在 barrier。下游会把数据接收缓存起来，然后直接处理 barrier。
 
 ### 4.3 Incremental Checkpoint
 
@@ -321,7 +321,7 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 2. Compaction 开销较大，可能导致 write stall 和 CPU 突刺
 3. 事务化 sink 端到端延迟较大：2PC sink 在 checkpoint 时进行 commit，checkpoint 决定了 sink commit 的速度。
 
-### 4.4 Changelog Incremental Checkpoint 思想
+### 4.4 Generic Log-Based Incremental Checkpointing 思想
 
 利用数据库中 WAL 的思想。更新数据先写 WAL，同时写 RocksDB。只需上传 WAL 数据，恢复时依靠 WAL 恢复数据。（可以做的事情：远程合并 WAL 文件）  
 
@@ -333,7 +333,7 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 - **劣势：** 恢复时间比较长，可以理解，毕竟是重放。全量大小其实也不算大。
 - **反压下的表现不大理想：** 估计这个时候 CPU 差不多打满了，双写开销有点大。
 
-### 4.6 美团对 Changelog Incremental Checkpoint 的优化
+### 4.6 美团对 Generic Log-Based Incremental Checkpointing 的优化
 
 #### 文件下载优化
 
