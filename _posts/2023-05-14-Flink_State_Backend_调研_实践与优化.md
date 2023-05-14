@@ -253,7 +253,7 @@ B 站用自研的 Taishan（基于 RocksDB 和 SparrowDB）代替了 RocksDB，�
 
 **核心：** 虚拟 SST 数据结构，从而延迟合并，并提供更好的合并策略。
 
-![image.png](https://raw.githubusercontent.com/zhihaop/zhihaop.github.io/master/_imgs/2023-05-14/7.png)
+![image.png](https://raw.githubusercontent.com/zhihaop/zhihaop.github.io/master/_imgs/2023-05-14/7.webp)
 
 **关键点**
 
