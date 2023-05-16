@@ -4,4 +4,4 @@ title: About
 permalink: /about/
 ---
 
-一个迷茫的CS学生，一个曾经的ACM选手
+对数据库、存储、后端开发感兴趣，分享交流欢迎联系邮件 `zhihaop@qq.com`
